@@ -370,6 +370,46 @@ body{
   line-height: 1.9;
 }
 
+/* === 卡片加载占位 === */
+.card-loading{
+  position: relative;
+}
+.loader{
+  display: flex; gap: 6px;
+  margin-bottom: 10px;
+}
+.loader-dot{
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--gold, #ffd56b);
+  animation: loader-bounce 1.2s ease-in-out infinite;
+}
+.loader-dot:nth-child(2){ animation-delay: .15s; }
+.loader-dot:nth-child(3){ animation-delay: .30s; }
+@keyframes loader-bounce{
+  0%, 80%, 100%{ transform: scale(.4); opacity: .5; }
+  40%           { transform: scale(1);  opacity: 1; }
+}
+.loader-text{
+  color: rgba(255,231,241,.65);
+  font-size: 12px;
+  letter-spacing: 2px;
+}
+
+/* === 通用加载占位骨架 === */
+.skeleton-card{
+  background: linear-gradient(110deg,
+    rgba(91,42,79,.4) 30%,
+    rgba(91,42,79,.7) 50%,
+    rgba(91,42,79,.4) 70%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.4s ease-in-out infinite;
+}
+@keyframes skeleton-shimmer{
+  0%   { background-position: 100% 0; }
+  100% { background-position: -100% 0; }
+}
+
 /* === 音乐按钮 === */
 .music-btn{
   position: fixed;

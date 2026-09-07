@@ -1,27 +1,47 @@
 /* =========================================================
- * 生日时光纪念册 · 主逻辑
- * 高内聚：渲染/翻页/检测 分模块；低耦合：数据通过 JSON 注入
+ * 生日时光纪念册 · 主逻辑（流式加载版）
+ * - 数据加载后立即渲染所有页面（无图占位）
+ * - 图片按顺序逐张探测+加载，加载完更新对应卡片
+ * - 用户可立即看到封面并开始翻页，无需等待全部图片
  * ========================================================= */
 
 const CONFIG = {
-  imagesDir: '图片',          // 图片目录
-  imageExt: '.jpg',           // 图片扩展名
+  imagesDir: '图片',
+  imageExt: '.jpg',
   bgFallback: '图片/背景图.jpg',
   dataUrl: 'data/pages.json',
-  maxProbe: 99                // 最多探测的图片数量
+  maxProbe: 99,
+  loadConcurrency: 2,        // 同时加载的图片数
+  probeTimeoutMs: 8000       // 单张图探测超时
 };
 
-/* ---------- 工具：图片预加载（同时探测存在性 + 获取宽高） ---------- */
-function preloadImage(src){
+/* ---------- 工具：图片预加载（带超时） ---------- */
+function preloadImage(src, timeoutMs = CONFIG.probeTimeoutMs){
   return new Promise(resolve => {
     const img = new Image();
-    img.onload  = () => resolve({ ok: true,  w: img.naturalWidth, h: img.naturalHeight });
-    img.onerror = () => resolve({ ok: false, w: 0, h: 0 });
+    let done = false;
+    const timer = setTimeout(() => {
+      if(done) return;
+      done = true;
+      resolve({ ok: false, w: 0, h: 0, timeout: true });
+    }, timeoutMs);
+    img.onload = () => {
+      if(done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve({ ok: true, w: img.naturalWidth, h: img.naturalHeight });
+    };
+    img.onerror = () => {
+      if(done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve({ ok: false, w: 0, h: 0 });
+    };
     img.src = src;
   });
 }
 
-/* 简化比例（如 1920x1080 -> "16/9"） */
+/* 简化比例 */
 function simplifyRatio(w, h){
   if(!w || !h) return '4/3';
   const gcd = (a, b) => b ? gcd(b, a % b) : a;
@@ -29,34 +49,17 @@ function simplifyRatio(w, h){
   return `${w/g}/${h/g}`;
 }
 
-/* ---------- 自动探测时间线图片（1.jpg, 2.jpg, ...），同时记录宽高 ---------- */
-async function detectTimelineImages(){
-  const found = [];
-  for(let i = 1; i <= CONFIG.maxProbe; i++){
-    const src = `${CONFIG.imagesDir}/${i}${CONFIG.imageExt}`;
-    const r = await preloadImage(src);
-    if(r.ok){
-      found.push({ n: i, src, w: r.w, h: r.h, ratio: simplifyRatio(r.w, r.h) });
-    } else {
-      break; // 遇到第一个缺失即停止，保证连续编号
-    }
-  }
-  return found;
-}
-
-/* ---------- 加载数据：优先使用内联变量（file:// 协议可用），否则回退到 fetch（服务器模式） ---------- */
+/* ---------- 加载数据 ---------- */
 async function loadData(){
-  // 优先用 pages.js 内联数据（双击 HTML 即可工作，无需服务器）
   if(typeof window.PAGES_DATA === 'object' && window.PAGES_DATA){
     return window.PAGES_DATA;
   }
-  // 回退到 fetch（HTTP 服务器模式下兼容旧用法）
   try{
     const res = await fetch(CONFIG.dataUrl, { cache: 'no-cache' });
     if(!res.ok) throw new Error('HTTP ' + res.status);
     return await res.json();
   }catch(err){
-    console.error('[数据加载失败] 请确保 data/pages.js 存在并通过 <script> 引入，或通过本地服务器访问。', err);
+    console.error('[数据加载失败]', err);
     return null;
   }
 }
@@ -74,37 +77,43 @@ function renderCover(data){
     </div>`;
 }
 
-/* ---------- 渲染：时间线卡片 ---------- */
-function renderTimelinePage(item, hasImage, imgSrc){
+/* ---------- 渲染：时间线卡片（占位状态） ---------- */
+function renderTimelinePagePlaceholder(item, index){
   const time = item.time || '';
   const title = item.title || '';
-  const desc = item.desc || '';
-
-  if(!hasImage){
-    // 无图但 JSON 有该条目：显示纯文字卡片（仍可点击翻转）
-    return `
-      <span class="time-tag">${time}</span>
-      <div class="card-3d" role="button" tabindex="0" aria-label="点击翻开 ${title}">
-        <div class="card-inner">
-          <div class="card-face card-front" style="background: linear-gradient(135deg,#5b2a4f,#2a0f24); display:flex; align-items:center; justify-content:center;">
-            <div style="color:rgba(255,231,241,.7); font-size:13px; letter-spacing:2px;">未配置图片</div>
-          </div>
-          <div class="card-face card-back">
-            <h3>${title}</h3>
-            <p>${desc}</p>
-            <div class="heart">♥ ♥ ♥</div>
-          </div>
-        </div>
-      </div>`;
-  }
-
+  const desc  = item.desc || '';
   return `
     <span class="time-tag">${time}</span>
-    <div class="card-3d" role="button" tabindex="0" aria-label="点击翻开 ${title}" style="--ar:${item.ratio || '4/3'}; --pw:${item.w || 0}; --ph:${item.h || 0};">
+    <div class="card-3d" role="button" tabindex="0" aria-label="点击翻开 ${title}" data-card-index="${index}">
       <div class="card-inner">
-        <div class="card-face card-front">
-          <img src="${imgSrc}" alt="${title}" loading="lazy">
-          <span class="hint"><span class="dot"></span>点击翻开</span>
+        <div class="card-face card-front card-loading" style="background: linear-gradient(135deg,#5b2a4f,#2a0f24); display:flex; align-items:center; justify-content:center;">
+          <div class="loader">
+            <div class="loader-dot"></div>
+            <div class="loader-dot"></div>
+            <div class="loader-dot"></div>
+          </div>
+          <span class="loader-text">图片加载中…</span>
+        </div>
+        <div class="card-face card-back">
+          <h3>${title}</h3>
+          <p>${desc}</p>
+          <div class="heart">♥ ♥ ♥</div>
+        </div>
+      </div>
+    </div>`;
+}
+
+/* ---------- 渲染：无图卡片 ---------- */
+function renderNoImageCard(item){
+  const time = item.time || '';
+  const title = item.title || '';
+  const desc  = item.desc || '';
+  return `
+    <span class="time-tag">${time}</span>
+    <div class="card-3d" role="button" tabindex="0" aria-label="点击翻开 ${title}">
+      <div class="card-inner">
+        <div class="card-face card-front" style="background: linear-gradient(135deg,#5b2a4f,#2a0f24); display:flex; align-items:center; justify-content:center;">
+          <div style="color:rgba(255,231,241,.7); font-size:13px; letter-spacing:2px;">未配置图片</div>
         </div>
         <div class="card-face card-back">
           <h3>${title}</h3>
@@ -164,13 +173,10 @@ class Paginator{
   bind(){
     this.btnNext.addEventListener('click', () => this.next());
     this.btnPrev.addEventListener('click', () => this.prev());
-
     document.addEventListener('keydown', e => {
       if(e.key === 'ArrowRight' || e.key === ' ') this.next();
       else if(e.key === 'ArrowLeft') this.prev();
     });
-
-    // 触摸滑动
     const container = document.getElementById('pages');
     let startX = 0, startY = 0, swiping = false;
     container.addEventListener('touchstart', e => {
@@ -187,8 +193,6 @@ class Paginator{
         if(dx < 0) this.next(); else this.prev();
       }
     }, { passive: true });
-
-    // 桌面端鼠标拖拽
     let down = false, mx = 0;
     container.addEventListener('mousedown', e => { down = true; mx = e.clientX; });
     container.addEventListener('mouseup', e => {
@@ -197,6 +201,13 @@ class Paginator{
       const dx = e.clientX - mx;
       if(Math.abs(dx) > 80){ if(dx < 0) this.next(); else this.prev(); }
     });
+  }
+  // 动态更新页码（流式加载后会增加页面）
+  refresh(){
+    this.pageEls = [...document.querySelectorAll('.page')];
+    this.dots    = [...document.querySelectorAll('.pager .dot')];
+    this.total   = this.pageEls.length;
+    this.render();
   }
 }
 
@@ -231,12 +242,8 @@ class MusicController{
     this.audio.src = this.src;
     this.audio.load();
     this.btn.addEventListener('click', () => this.toggle());
-    // 自动播放：浏览器通常禁止自动播放，需用户首次交互后触发
     const tryAutoplay = () => {
-      this.play().catch(() => {
-        // 自动播放被拦截：显示提示
-        this._showTip('点击右上角图标开启背景音乐');
-      });
+      this.play().catch(() => this._showTip('点击右上角图标开启背景音乐'));
       document.removeEventListener('click', tryAutoplay);
       document.removeEventListener('touchstart', tryAutoplay);
       document.removeEventListener('keydown', tryAutoplay);
@@ -248,7 +255,7 @@ class MusicController{
   _noSource(){
     this.btn.style.opacity = '.55';
     this.btn.addEventListener('click', () => {
-      this._showTip('未配置音乐文件<br>请将音乐放入「音乐/」文件夹<br>并在 pages.json 设置 music 路径');
+      this._showTip('未配置音乐文件<br>请将音乐放入「音乐/」文件夹<br>并在 pages.js 设置 music 路径');
     });
   }
   _initTip(){
@@ -287,9 +294,7 @@ class MusicController{
       this.pause();
       this._showTip('音乐已暂停', 1500);
     } else {
-      this.play().catch(() => {
-        this._showTip('播放失败，请检查音乐文件是否存在');
-      });
+      this.play().catch(() => this._showTip('播放失败，请检查音乐文件是否存在'));
     }
   }
 }
@@ -328,7 +333,6 @@ function fitCardSize(el, w, h){
   const ratio = (w && h) ? w / h : 4 / 3;
   const vw = window.innerWidth;
   const vh = window.innerHeight;
-  // 横图：宽度上限 560 / 86vw；竖图：宽度上限 320 / 70vw；高度统一上限 65vh
   const isPortrait = ratio < 1;
   const maxW = isPortrait ? Math.min(vw * 0.70, 320) : Math.min(vw * 0.86, 560);
   const maxH = vh * 0.62;
@@ -344,14 +348,10 @@ function fitCardSize(el, w, h){
   }
   el.style.width  = cw.toFixed(1) + 'px';
   el.style.height = ch.toFixed(1) + 'px';
-
-  // 同步根据卡片尺寸 + 文字字数 计算正文字号
   const pEl = el.querySelector('.card-back p');
   const textLen = pEl ? pEl.textContent.length : 30;
-  // 基准：按卡片对角线长度比例
   const diag = Math.sqrt(cw * cw + ch * ch);
-  let base = diag / 26;            // 对角线越大字越大
-  // 字数越多字越小：分段折减
+  let base = diag / 26;
   if(textLen > 40)  base *= 0.92;
   if(textLen > 80)  base *= 0.90;
   if(textLen > 120) base *= 0.88;
@@ -362,16 +362,63 @@ function fitCardSize(el, w, h){
   el.style.setProperty('--title-size', titleSize.toFixed(1) + 'px');
 }
 
-/* 遍历所有 .card-3d，根据其 --pw / --ph CSS 变量重新计算尺寸 */
 function refitAllCards(){
   document.querySelectorAll('.card-3d').forEach(el => {
     const w = parseFloat(el.style.getPropertyValue('--pw')) || 0;
     const h = parseFloat(el.style.getPropertyValue('--ph')) || 0;
-    fitCardSize(el, w, h);
+    if(w && h) fitCardSize(el, w, h);
   });
 }
 
-/* ---------- 主入口 ---------- */
+/* ---------- 加载状态指示器 ---------- */
+function setGlobalLoading(visible){
+  let el = document.getElementById('globalLoader');
+  if(!el){
+    el = document.createElement('div');
+    el.id = 'globalLoader';
+    el.style.cssText = `
+      position:fixed; top:50%; left:50%; transform:translate(-50%,-50%);
+      z-index:200; color:var(--gold,#ffd56b); font-size:14px; letter-spacing:2px;
+      background:rgba(42,15,36,.6); padding:14px 24px; border-radius:10px;
+      border:1px solid rgba(255,213,107,.3); transition:opacity .4s;
+    `;
+    el.textContent = '正在加载…';
+    document.body.appendChild(el);
+  }
+  el.style.opacity = visible ? '1' : '0';
+  el.style.pointerEvents = 'none';
+}
+
+/* ---------- 流式加载图片并更新对应卡片 ---------- */
+async function loadCardImage(index, src, txt, onUpdate){
+  const r = await preloadImage(src);
+  if(!r.ok){
+    // 加载失败：替换为"无图"卡片
+    return { ok: false };
+  }
+  const ratio = simplifyRatio(r.w, r.h);
+  return { ok: true, src, w: r.w, h: r.h, ratio, txt };
+}
+
+/* 把已加载好的图片应用到对应 DOM 卡片 */
+function applyImageToCard(cardEl, info){
+  const imgSrc = info.src;
+  const title = info.txt.title || '';
+  // 替换正面
+  const front = cardEl.querySelector('.card-front');
+  front.classList.remove('card-loading');
+  front.innerHTML = `
+    <img src="${imgSrc}" alt="${title}" loading="lazy">
+    <span class="hint"><span class="dot"></span>点击翻开</span>
+  `;
+  // 注入尺寸变量并适配
+  cardEl.style.setProperty('--ar', info.ratio);
+  cardEl.style.setProperty('--pw', info.w);
+  cardEl.style.setProperty('--ph', info.h);
+  fitCardSize(cardEl, info.w, info.h);
+}
+
+/* ---------- 主入口（流式加载） ---------- */
 async function main(){
   const data = await loadData();
   if(!data){
@@ -380,79 +427,115 @@ async function main(){
     return;
   }
 
-  // 设置背景
+  // 1. 立即设置背景（异步加载，不阻塞）
   const bg = data.background || CONFIG.bgFallback;
-  document.getElementById('bgLayer').style.backgroundImage = `url('${bg}')`;
+  const bgEl = document.getElementById('bgLayer');
+  // 先用低分辨率占位色，背景图加载完会自动显示
+  const bgImg = new Image();
+  bgImg.onload = () => { bgEl.style.backgroundImage = `url('${bg}')`; };
+  bgImg.src = bg;
 
-  // 自动探测时间线图片
-  const images = await detectTimelineImages();
-  const pages = data.pages || [];
-
-  // 合并：以图片为准，对应 JSON 文本；若图片多于文本，多出部分用默认文本
-  const renderList = [];
-  const maxLen = Math.max(images.length, pages.length);
-  for(let i = 0; i < maxLen; i++){
-    const img = images[i];
-    const txt = pages[i];
-    const imgMeta = img ? { w: img.w, h: img.h, ratio: img.ratio } : {};
-    if(img && txt){
-      renderList.push({ hasImage: true, src: img.src, ...imgMeta, ...txt });
-    } else if(img && !txt){
-      // 图片存在但 JSON 没对应条目：使用默认文本
-      renderList.push({
-        hasImage: true, src: img.src, ...imgMeta,
-        time: '',
-        title: '回忆',
-        desc: '这一刻，无需言语，已是珍贵。'
-      });
-    } else if(!img && txt){
-      // JSON 有条目但图片缺失：仍显示（无图卡片）
-      renderList.push({ hasImage: false, src: '', ...txt });
-    }
-  }
-
-  // 组装页面：封面 + 时间线页 + 结尾
+  // 2. 立即渲染封面 + 已知文本的时间线页（占位） + 结尾
   const pagesEl = document.getElementById('pages');
   const pagerEl = document.getElementById('pager');
   pagesEl.innerHTML = '';
   pagerEl.innerHTML = '';
 
-  const allPages = [
-    { type: 'cover', html: renderCover(data) },
-    ...renderList.map(item => ({
-      type: 'tl',
-      html: renderTimelinePage(item, item.hasImage, item.src)
-    })),
-    { type: 'ending', html: renderEnding(data) }
-  ];
+  const txtPages = data.pages || [];
 
-  allPages.forEach((p, i) => {
+  // 先渲染封面
+  const coverEl = document.createElement('section');
+  coverEl.className = 'page cover';
+  coverEl.dataset.index = '0';
+  coverEl.innerHTML = renderCover(data);
+  pagesEl.appendChild(coverEl);
+
+  // 渲染每个时间线页（有文本就先放占位卡，无文本先留空位）
+  const tlPageEls = [];
+  for(let i = 0; i < txtPages.length; i++){
     const el = document.createElement('section');
-    el.className = `page ${p.type === 'cover' ? 'cover' : p.type === 'ending' ? 'ending' : 'tl-page'}`;
-    el.dataset.index = i;
-    el.innerHTML = p.html;
+    el.className = 'page tl-page';
+    el.dataset.index = String(i + 1);
+    el.innerHTML = renderTimelinePagePlaceholder(txtPages[i], i);
     pagesEl.appendChild(el);
+    tlPageEls.push(el);
+  }
 
+  // 渲染结尾
+  const endingEl = document.createElement('section');
+  endingEl.className = 'page ending';
+  endingEl.dataset.index = String(txtPages.length + 1);
+  endingEl.innerHTML = renderEnding(data);
+  pagesEl.appendChild(endingEl);
+
+  // 渲染页码指示器
+  const totalDots = txtPages.length + 2;
+  for(let i = 0; i < totalDots; i++){
     const dot = document.createElement('div');
     dot.className = 'dot';
-    dot.dataset.index = i;
-    dot.addEventListener('click', () => paginator && paginator.goTo(i));
+    dot.dataset.index = String(i);
+    dot.addEventListener('click', () => window.paginator && window.paginator.goTo(i));
     pagerEl.appendChild(dot);
-  });
+  }
 
-  // 初始化交互
+  // 3. 立即初始化交互（用户可立即看到封面并开始翻页）
   bindCardFlip();
   startPetals();
   bindParallax();
-  refitAllCards();                         // 首次按图片长宽比适配卡片尺寸
+  window.paginator = new Paginator();
+  window.music     = new MusicController(data.music || '');
   window.addEventListener('resize', () => {
     clearTimeout(window.__fitTimer);
     window.__fitTimer = setTimeout(refitAllCards, 150);
   });
-  window.paginator = new Paginator();
-  window.music     = new MusicController(data.music || '');
 
-  console.log(`[加载完成] 共 ${images.length} 张图片，${pages.length} 条文本记录，渲染 ${renderList.length} 个时间线页。`);
+  // 4. 流式探测+加载图片：从第 1 张开始，遇到缺失即停止
+  //    使用低并发队列，按顺序加载，加载完一张就更新一张
+  const queue = [];
+  for(let i = 0; i < txtPages.length; i++){
+    queue.push({ index: i, src: `${CONFIG.imagesDir}/${i+1}${CONFIG.imageExt}`, txt: txtPages[i] });
+  }
+
+  let probeStop = false;     // 连续缺失后停止
+  const concurrency = CONFIG.loadConcurrency;
+  let cursor = 0;
+
+  async function worker(){
+    while(cursor < queue.length && !probeStop){
+      const myIndex = cursor++;
+      const job = queue[myIndex];
+      const r = await preloadImage(job.src);
+      if(!r.ok){
+        // 加载失败：当作图片不存在，把占位卡换成无图卡片
+        probeStop = true;  // 遇到第一个缺失即停止（保持连续编号策略）
+        const cardEl = tlPageEls[job.index].querySelector('.card-3d');
+        if(cardEl){
+          // 保留原卡片结构，仅把正面改为"未配置图片"
+          const front = cardEl.querySelector('.card-front');
+          front.classList.remove('card-loading');
+          front.style.background = 'linear-gradient(135deg,#5b2a4f,#2a0f24)';
+          front.style.display = 'flex';
+          front.style.alignItems = 'center';
+          front.style.justifyContent = 'center';
+          front.innerHTML = '<div style="color:rgba(255,231,241,.7); font-size:13px; letter-spacing:2px;">未配置图片</div>';
+        }
+        continue;
+      }
+      const ratio = simplifyRatio(r.w, r.h);
+      const info = { ok: true, src: job.src, w: r.w, h: r.h, ratio, txt: job.txt };
+      // 更新对应 DOM
+      const cardEl = tlPageEls[job.index].querySelector('.card-3d');
+      if(cardEl) applyImageToCard(cardEl, info);
+      console.log(`[流式加载] ${job.src} ✓ (${r.w}×${r.h})`);
+    }
+  }
+
+  // 启动 N 个 worker 并发加载
+  const workers = [];
+  for(let i = 0; i < concurrency; i++) workers.push(worker());
+  await Promise.all(workers);
+
+  console.log('[流式加载完成]');
 }
 
 main();
