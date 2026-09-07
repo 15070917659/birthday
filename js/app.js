@@ -241,16 +241,27 @@ class MusicController{
   _setup(){
     this.audio.src = this.src;
     this.audio.load();
-    this.btn.addEventListener('click', () => this.toggle());
+    this.btn.addEventListener('click', e => {
+      e.stopPropagation();
+      this.toggle();
+    });
+    // 进入页面后，用户点击/触摸/按键任意位置即自动播放
+    // 浏览器要求 play() 必须在用户手势同步调用栈内执行
     const tryAutoplay = () => {
-      this.play().catch(() => this._showTip('点击右上角图标开启背景音乐'));
-      document.removeEventListener('click', tryAutoplay);
-      document.removeEventListener('touchstart', tryAutoplay);
-      document.removeEventListener('keydown', tryAutoplay);
+      if(this.playing) return;             // 已播放则不再尝试
+      this.play().then(() => {
+        // 成功播放：移除所有监听
+        document.removeEventListener('click',     tryAutoplay, true);
+        document.removeEventListener('touchstart', tryAutoplay, true);
+        document.removeEventListener('keydown',    tryAutoplay, true);
+      }).catch(() => {
+        // 失败：保留监听器，下次交互继续尝试（不弹提示避免打扰）
+      });
     };
-    document.addEventListener('click', tryAutoplay, { once: true });
-    document.addEventListener('touchstart', tryAutoplay, { once: true });
-    document.addEventListener('keydown', tryAutoplay, { once: true });
+    // capture 阶段监听，确保在所有目标回调之前触发
+    document.addEventListener('click',     tryAutoplay, true);
+    document.addEventListener('touchstart', tryAutoplay, true);
+    document.addEventListener('keydown',    tryAutoplay, true);
   }
   _noSource(){
     this.btn.style.opacity = '.55';
