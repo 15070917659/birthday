@@ -59,7 +59,7 @@ async function loadData(){
     if(!res.ok) throw new Error('HTTP ' + res.status);
     return await res.json();
   }catch(err){
-    console.error('[数据加载失败]', err);
+    console.error('[数据加载失败] - app.js:62', err);
     return null;
   }
 }
@@ -97,7 +97,7 @@ function renderTimelinePagePlaceholder(item, index){
         <div class="card-face card-back">
           <h3>${title}</h3>
           <p>${desc}</p>
-          <div class="heart">♥ ♥ ♥</div>
+          <div class="heart"></div>
         </div>
       </div>
     </div>`;
@@ -118,7 +118,7 @@ function renderNoImageCard(item){
         <div class="card-face card-back">
           <h3>${title}</h3>
           <p>${desc}</p>
-          <div class="heart">♥ ♥ ♥</div>
+          <div class="heart"></div>
         </div>
       </div>
     </div>`;
@@ -371,6 +371,7 @@ function fitCardSize(el, w, h){
   const titleSize = Math.max(16, Math.min(28, base * 1.35));
   el.style.setProperty('--text-size',  textSize.toFixed(1) + 'px');
   el.style.setProperty('--title-size', titleSize.toFixed(1) + 'px');
+  fillHearts(el);
 }
 
 function refitAllCards(){
@@ -378,7 +379,23 @@ function refitAllCards(){
     const w = parseFloat(el.style.getPropertyValue('--pw')) || 0;
     const h = parseFloat(el.style.getPropertyValue('--ph')) || 0;
     if(w && h) fitCardSize(el, w, h);
+    fillHearts(el);
   });
+}
+
+/* ---------- 根据卡片宽度动态填满一排爱心 ---------- */
+function fillHearts(cardEl){
+  const heartEl = cardEl.querySelector('.heart');
+  if(!heartEl) return;
+  const cardWidth = cardEl.offsetWidth;
+  if(cardWidth <= 0) return;
+  // 单个爱心约 14px 宽 + 6px 间距 = 20px，根据卡片宽度计算数量
+  const heartSize = 14;
+  const gap = 6;
+  const padding = 44;   // 左右内边距
+  const available = cardWidth - padding;
+  const count = Math.max(3, Math.floor(available / (heartSize + gap)));
+  heartEl.innerHTML = Array.from({length: count}, () => '♥').join(' ');
 }
 
 /* ---------- 加载状态指示器 ---------- */
@@ -537,7 +554,7 @@ async function main(){
       // 更新对应 DOM
       const cardEl = tlPageEls[job.index].querySelector('.card-3d');
       if(cardEl) applyImageToCard(cardEl, info);
-      console.log(`[流式加载] ${job.src} ✓ (${r.w}×${r.h})`);
+      console.log(`[流式加载] ${job.src} ✓ (${r.w}×${r.h}) - app.js:540`);
     }
   }
 
@@ -546,7 +563,7 @@ async function main(){
   for(let i = 0; i < concurrency; i++) workers.push(worker());
   await Promise.all(workers);
 
-  console.log('[流式加载完成]');
+  console.log('[流式加载完成] - app.js:549');
 }
 
 main();

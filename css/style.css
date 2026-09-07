@@ -314,6 +314,12 @@ body{
   color: var(--pink);
   font-size: 14px;
   flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  line-height: 1.2;
 }
 
 /* === 结尾页 === */
